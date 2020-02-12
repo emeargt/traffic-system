@@ -378,10 +378,11 @@ static void gpioB_init( void )
 }
 
 // Initialize and enable the ADC peripheral
- static void adc_init( void )
- {
-	 ADC_InitTypeDef ADC_InitStruct;
-	 
+static void adc_init( void )
+{
+	// Enable Periph Clock
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
+	ADC_InitTypeDef ADC_InitStruct;
 	ADC_InitStruct.ADC_Resolution = ADC_Resolution_12b;
 	ADC_InitStruct.ADC_ScanConvMode = DISABLE;
 	ADC_InitStruct.ADC_ContinuousConvMode = DISABLE;
@@ -390,10 +391,6 @@ static void gpioB_init( void )
 	ADC_InitStruct.ADC_DataAlign = ADC_DataAlign_Right;
 	ADC_InitStruct.ADC_NbrOfConversion = 1;
 	
-	/*Write ADC Configuration to register*/
+	// Write ADC Configuration to register
 	ADC_Init(ADC1, &ADC_InitStruct);
-	
-	/*Enable Periph Clock*/
-	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE); 
-	
- }
+}
