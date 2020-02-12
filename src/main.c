@@ -138,7 +138,8 @@ functionality.
 #include <stdint.h>
 #include <stdio.h>
 #include "stm32f4_discovery.h"
-#include "stm32f4xx_spi.h"
+#include "stm32f4xx_conf.h"
+
 /* Kernel includes. */
 #include "stm32f4xx.h"
 #include "../FreeRTOS_Source/include/FreeRTOS.h"
@@ -171,6 +172,7 @@ static void prvSetupHardware( void );
 
 static void spi_init( void );
 static void gpioA_init( void );
+static void gpioB_init( void );
 
 /*
  * The queue send and receive tasks as described in the comments at the top of
@@ -186,15 +188,17 @@ xQueueHandle xQueue_handle = 0;
 int main(void)
 {
 
-	/* Initialize LEDs */
+	/* Initialize LEDs
 	STM_EVAL_LEDInit(amber_led);
 	STM_EVAL_LEDInit(green_led);
 	STM_EVAL_LEDInit(red_led);
-	STM_EVAL_LEDInit(blue_led);
+	STM_EVAL_LEDInit(blue_led);*/
 
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
+	gpioB_init();
+	spi_init();
 
 	/* Create the queue used by the queue send and queue receive tasks.
 	http://www.freertos.org/a00116.html */
@@ -217,9 +221,14 @@ int main(void)
 
 static void Manager_Task( void *pvParameters )
 {
-	uint32_t tx_data = amber;
+	uint8_t data = 0b1;
+	while(1)
+	{
+		SPI_I2S_SendData(SPI1, data);
+		vTaskDelay(1000);
+	}
 
-
+	/*uint32_t tx_data = amber;
 	while(1)
 	{
 
@@ -243,7 +252,7 @@ static void Manager_Task( void *pvParameters )
 		{
 			printf("Manager Failed!\n");
 		}
-	}
+	}*/
 }
 
 /*-----------------------------------------------------------*/
@@ -310,11 +319,11 @@ static void prvSetupHardware( void )
 
 static void spi_init( void )
 {
-	RCC_APBPeriphClockCmd(RCC_APB2Periph_SPI1, ENABLE); // enable periph clk for SPI1
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_SPI1, ENABLE); // enable periph clk for SPI1
 
 	// Init SPI interface
 	SPI_InitTypeDef SPI1_InitStruct;
-	SPI1_InitStruct.SPI_Direction = SPI_Direction_1Line_Tx;
+	SPI1_InitStruct.SPI_Direction = SPI_Direction_2Lines_FullDuplex;
 	SPI1_InitStruct.SPI_Mode = SPI_Mode_Master;
 	SPI1_InitStruct.SPI_DataSize = SPI_DataSize_8b;
 	SPI1_InitStruct.SPI_CPOL = SPI_CPOL_High;
@@ -322,12 +331,16 @@ static void spi_init( void )
 	SPI1_InitStruct.SPI_NSS = SPI_NSS_Soft;
 	SPI1_InitStruct.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_256;
 	SPI1_InitStruct.SPI_FirstBit = SPI_FirstBit_MSB;
+	SPI1_InitStruct.SPI_CRCPolynomial = 7;
 	SPI_Init(SPI1, &SPI1_InitStruct);
+	SPI_NSSInternalSoftwareConfig(SPI1, SPI_NSSInternalSoft_Set);
+	SPI_CalculateCRC(SPI1, DISABLE);
+	SPI_Cmd(SPI1, ENABLE);
 }
 
 static void gpioA_init( void )
 {
-	RCC_AHBPeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE); // enable clocks for SPI1 pins on GPIOA
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE); // enable clocks for SPI1 pins on GPIOA
 
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource5, GPIO_AF_SPI1); // SPI1_SCK
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource6, GPIO_AF_SPI1); // SPI1_MISO
@@ -339,6 +352,22 @@ static void gpioA_init( void )
 	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AF;
 	GPIOA_InitStruct.GPIO_OType = GPIO_OType_PP;
 	GPIOA_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
-	GPIOA_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIOA_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(GPIOA, &GPIOA_InitStruct);
+}
+
+static void gpioB_init( void )
+{
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource3, GPIO_AF_SPI1); // SPI1_SCK
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource5, GPIO_AF_SPI1); // SPI1_MOSI
+
+	GPIO_InitTypeDef GPIOB_InitStruct;
+	GPIOB_InitStruct.GPIO_Pin = GPIO_Pin_3 | GPIO_Pin_5;
+	GPIOB_InitStruct.GPIO_Mode = GPIO_Mode_AF;
+	GPIOB_InitStruct.GPIO_OType = GPIO_OType_PP;
+	GPIOB_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIOB_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_Init(GPIOB, &GPIOB_InitStruct);
 }
