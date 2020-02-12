@@ -171,6 +171,7 @@ static void prvSetupHardware( void );
 
 static void spi_init( void );
 static void gpioA_init( void );
+static void adc_init( void );
 
 /*
  * The queue send and receive tasks as described in the comments at the top of
@@ -341,4 +342,31 @@ static void gpioA_init( void )
 	GPIOA_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIOA_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_Init(GPIOA, &GPIOA_InitStruct);
+	
+	GPIOA_InitStruct.GPIO_Pin = ADC_Pin;
+	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AN;
+	GPIOA_Init(GPIOA, &GPIOA_InitStruct);
 }
+
+/*
+ * Initialize and enable the ADC peripheral 
+ */
+ static void adc_init( void )
+ {
+	 ADC_InitTypeDef ADC_InitStruct;
+	 
+	ADC_InitStruct.ADC_Resolution = ADC_Resolution_12b;
+	ADC_InitStruct.ADC_ScanConvMode = DISABLE;
+	ADC_InitStruct.ADC_ContinuousConvMode = DISABLE;
+	ADC_InitStruct.ADC_ExternalTrigConvEdge = ADC_ExternalTrigConvEdge_None;
+	ADC_InitStruct.ADC_ExternalTrigConv = ADC_ExternalTrigConv_T1_CC1;
+	ADC_InitStruct.ADC_DataAlign = ADC_DataAlign_Right;
+	ADC_InitStruct.ADC_NbrOfConversion = 1;
+	
+	/*Write ADC Configuration to register*/
+	ADC_Init(ADC1, &ADC_InitStruct);
+	
+	/*Enable Periph Clock*/
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE); 
+	
+ }
