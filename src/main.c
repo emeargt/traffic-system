@@ -169,6 +169,9 @@ char leds[4][10]= {"amber","green","red","blue"};
  */
 static void prvSetupHardware( void );
 
+static void spi_init( void );
+static void gpioA_init( void );
+
 /*
  * The queue send and receive tasks as described in the comments at the top of
  * this file.
@@ -192,8 +195,6 @@ int main(void)
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
-	SPI_InitTypeDef SPI_InitStruct;
-
 
 	/* Create the queue used by the queue send and queue receive tasks.
 	http://www.freertos.org/a00116.html */
@@ -305,4 +306,39 @@ static void prvSetupHardware( void )
 
 	/* TODO: Setup the clocks, etc. here, if they were not configured before
 	main() was called. */
+}
+
+static void spi_init( void )
+{
+	RCC_APBPeriphClockCmd(RCC_APB2Periph_SPI1, ENABLE); // enable periph clk for SPI1
+
+	// Init SPI interface
+	SPI_InitTypeDef SPI1_InitStruct;
+	SPI1_InitStruct.SPI_Direction = SPI_Direction_1Line_Tx;
+	SPI1_InitStruct.SPI_Mode = SPI_Mode_Master;
+	SPI1_InitStruct.SPI_DataSize = SPI_DataSize_8b;
+	SPI1_InitStruct.SPI_CPOL = SPI_CPOL_High;
+	SPI1_InitStruct.SPI_CPHA = SPI_CPHA_1Edge;
+	SPI1_InitStruct.SPI_NSS = SPI_NSS_Soft;
+	SPI1_InitStruct.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_256;
+	SPI1_InitStruct.SPI_FirstBit = SPI_FirstBit_MSB;
+	SPI_Init(SPI1, &SPI1_InitStruct);
+}
+
+static void gpioA_init( void )
+{
+	RCC_AHBPeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE); // enable clocks for SPI1 pins on GPIOA
+
+	GPIO_PinAFConfig(GPIOA, GPIO_PinSource5, GPIO_AF_SPI1); // SPI1_SCK
+	GPIO_PinAFConfig(GPIOA, GPIO_PinSource6, GPIO_AF_SPI1); // SPI1_MISO
+	GPIO_PinAFConfig(GPIOA, GPIO_PinSource7, GPIO_AF_SPI1); // SPI1_MOSI
+
+	// Init pins for SPI
+	GPIO_InitTypeDef GPIOA_InitStruct;
+	GPIOA_InitStruct.GPIO_Pin = GPIO_Pin_5 | GPIO_Pin_6 | GPIO_Pin_7;
+	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AF;
+	GPIOA_InitStruct.GPIO_OType = GPIO_OType_PP;
+	GPIOA_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIOA_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA, &GPIOA_InitStruct);
 }
