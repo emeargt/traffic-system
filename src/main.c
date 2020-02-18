@@ -153,16 +153,12 @@ functionality.
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 100
 
-#define amber  	0
-#define green  	1
-#define red  	2
-#define blue  	3
-
-char leds[4][10]= {"amber","green","red","blue"};
-#define amber_led	LED3
-#define green_led	LED4
-#define red_led		LED5
-#define blue_led	LED6
+enum light
+{
+	GREEN = 0,
+	YELLOW = 1,
+	RED = 2
+};
 
 /*
  * TODO: Implement this function for any hardware specific clock configuration
@@ -185,7 +181,6 @@ static void Traffic_Gen_Task( void *pvParameters );
 static void Light_State_Task( void *pvParameters );
 static void Sys_Display_Task( void *pvParameters );
 
-xQueueHandle xQueue_handle = 0;
 xQueueHandle xQ_flow_rate = 0;
 xQueueHandle xQ_light_period = 0;
 xQueueHandle xQ_light_state = 0;
@@ -195,13 +190,6 @@ xQueueHandle xQ_car_gen = 0;
 
 int main(void)
 {
-
-	/* Initialize LEDs
-	STM_EVAL_LEDInit(amber_led);
-	STM_EVAL_LEDInit(green_led);
-	STM_EVAL_LEDInit(red_led);
-	STM_EVAL_LEDInit(blue_led);*/
-
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
@@ -212,13 +200,21 @@ int main(void)
 
 	/* Create the queue used by the queue send and queue receive tasks.
 	http://www.freertos.org/a00116.html */
-	xQueue_handle = xQueueCreate( 	mainQUEUE_LENGTH,		/* The number of items the queue can hold. */
-							sizeof( uint32_t ) );	/* The size of each item the queue holds. */
+	xQ_flow_rate = xQueueCreate( mainQUEUE_LENGTH, sizeof( double ) );
+	xQ_light_period = xQueueCreate( 1, sizeof(uint32_t) );
+	xQ_light_state = xQueueCreate( 1, sizeof(uint8_t) );
+	xQ_car_gen = xQueueCreate( mainQUEUE_LENGTH, sizeof(uint8_t) );
 
 	/* Add to the registry, for the benefit of kernel aware debugging. */
-	vQueueAddToRegistry( xQueue_handle, "MainQueue" );
+	vQueueAddToRegistry( xQ_flow_rate, "FlowRateQueue" );
+	vQueueAddToRegistry( xQ_light_period, "LightPeriodQueue" );
+	vQueueAddToRegistry( xQ_light_state, "LightStateQueue" );
+	vQueueAddToRegistry( xQ_car_gen, "CarGenQueue" );
 
-	xTaskCreate( Manager_Task, "Manager", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+	xTaskCreate( Flow_Adjust_Task, "Flow-Adjust", configMINIMAL_STACK_SIZE, NULL, 1, NULL );
+	xTaskCreate( Traffic_Gen_Task, "Traffic-Gen", configMINIMAL_STACK_SIZE, NULL, 0, NULL );
+	xTaskCreate( Light_State_Task, "Light-State", configMINIMAL_STACK_SIZE, NULL, 2, NULL );
+	xTaskCreate( Sys_Display_Task, "Sys-Display", configMINIMAL_STACK_SIZE, NULL, 0, NULL );
 
 	/* Start the tasks and timer running. */
 	vTaskStartScheduler();
@@ -229,51 +225,20 @@ int main(void)
 
 /*-----------------------------------------------------------*/
 
-static void Manager_Task( void *pvParameters )
-{
-	uint8_t data = 0b1;
-	uint16_t test = 0;
-	while(1)
-	{
-		//SPI_I2S_SendData(SPI1, data);
-
-		test=ADC_GetConversionValue(ADC1);
-		printf("%d\n",test);
-		vTaskDelay(1000);
-	}
-
-	/*uint32_t tx_data = amber;
-	while(1)
-	{
-
-		if(tx_data == amber)
-			STM_EVAL_LEDOn(amber_led);
-		if(tx_data == green)
-			STM_EVAL_LEDOn(green_led);
-		if(tx_data == red)
-			STM_EVAL_LEDOn(red_led);
-		if(tx_data == blue)
-			STM_EVAL_LEDOn(blue_led);
-
-		if( xQueueSend(xQueue_handle,&tx_data,1000))
-		{
-			printf("%s ON!\n", leds[tx_data]);
-			if(++tx_data == 4)
-				tx_data = 0;
-			vTaskDelay(1000);
-		}
-		else
-		{
-			printf("Manager Failed!\n");
-		}
-	}*/
-}
-
 static void Flow_Adjust_Task( void *pvParameters )
 {
 	while(1)
 	{
-
+		double adc_norm = (double)ADC_GetConversionValue(ADC1) / 4095;
+		double flow_rate = (0.8 * adc_norm + 0.2) * 100; // car gen probability between 20 - 100
+		if( xQueueSend( xQ_flow_rate, &flow_rate, 1000 ) )
+		{
+			vTaskDelay(1000);
+		}
+		else
+		{
+			printf("Flow Adjust Task: Failed to add flow rate to queue.\n");
+		}
 	}
 }
 
@@ -281,21 +246,53 @@ static void Traffic_Gen_Task( void *pvParameters )
 {
 	while(1)
 	{
-
+		double prob = 0.0;
+		if( xQueueReceive( xQ_flow_rate, &prob, 1000 ) )
+		{
+			uint8_t car_val = (rand() % 100) < prob;
+			if( !xQueueSend( xQ_car_gen, &car_val, 1000 ) )
+			{
+				printf("Traffic Gen Task: Failed to add new car (or non-car) to the queue.\n");
+			}
+		}
+		else
+		{
+			printf("Traffic Gen Task: No flow rate values available on the queue.\n");
+		}
+		vTaskDelay(100);
 	}
 }
 
 static void Light_State_Task( void *pvParameters )
 {
+	enum light state = GREEN;
+	unsigned int durations[3] = {0, 0, 0}; // these should probably have initial values
 	while(1)
 	{
+		double prob = 0.0;
+		if( xQueuePeek( xQ_flow_rate, &prob, 0 ) )
+		{
+			// update light durations
+		}
+		{
+			printf("Light State Task: No flow rate values to peek at.\n");
+		}
+		switch(state)
+		{
+		case GREEN:
+		case YELLOW:
+		case RED:
+		}
 
 	}
 }
 
 static void Sys_Display_Task( void *pvParameters )
 {
-
+	while(1)
+	{
+		//SPI_I2S_SendData(SPI1, data);
+	}
 }
 
 /*-----------------------------------------------------------*/
@@ -396,15 +393,12 @@ static void gpioA_init( void )
 	GPIO_Init(GPIOA, &GPIOA_InitStruct);
 
 	// Init pins for SPI
-
 	GPIOA_InitStruct.GPIO_Pin = GPIO_Pin_5 | GPIO_Pin_6 | GPIO_Pin_7;
 	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AF;
 	GPIOA_InitStruct.GPIO_OType = GPIO_OType_PP;
 	GPIOA_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIOA_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(GPIOA, &GPIOA_InitStruct);
-	
-
 }
 
 static void gpioB_init( void )
@@ -429,13 +423,13 @@ static void adc_init( void )
 	// Enable Periph Clock
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
 	ADC_CommonInitTypeDef ADC_CommonInitStruct;
-	/* Single ADC mode */
+	// Single ADC mode
 	ADC_CommonInitStruct.ADC_Mode = ADC_Mode_Independent;
-	 /* ADCCLK = PCLK2/2 */
+	// ADCCLK = PCLK2/2
 	ADC_CommonInitStruct.ADC_Prescaler = ADC_Prescaler_Div2;
-	 /* Available only for multi ADC mode */
+	// Available only for multi ADC mode
 	ADC_CommonInitStruct.ADC_DMAAccessMode = ADC_DMAAccessMode_Disabled;
-	 /* Delay between 2 sampling phases */
+	// Delay between 2 sampling phases
 	ADC_CommonInitStruct.ADC_TwoSamplingDelay =	ADC_TwoSamplingDelay_5Cycles;
 	ADC_CommonInit(&ADC_CommonInitStruct);
 
