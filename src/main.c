@@ -180,9 +180,16 @@ static void adc_init( void );
  * this file.
  */
 static void Manager_Task( void *pvParameters );
+static void Flow_Adjust_Task( void *pvParameters );
+static void Traffic_Gen_Task( void *pvParameters );
+static void Light_State_Task( void *pvParameters );
+static void Sys_Display_Task( void *pvParameters );
 
 xQueueHandle xQueue_handle = 0;
-
+xQueueHandle xQ_flow_rate = 0;
+xQueueHandle xQ_light_period = 0;
+xQueueHandle xQ_light_state = 0;
+xQueueHandle xQ_car_gen = 0;
 
 /*-----------------------------------------------------------*/
 
@@ -254,6 +261,35 @@ static void Manager_Task( void *pvParameters )
 			printf("Manager Failed!\n");
 		}
 	}*/
+}
+
+static void Flow_Adjust_Task( void *pvParameters )
+{
+	while(1)
+	{
+
+	}
+}
+
+static void Traffic_Gen_Task( void *pvParameters )
+{
+	while(1)
+	{
+
+	}
+}
+
+static void Light_State_Task( void *pvParameters )
+{
+	while(1)
+	{
+
+	}
+}
+
+static void Sys_Display_Task( void *pvParameters )
+{
+
 }
 
 /*-----------------------------------------------------------*/
