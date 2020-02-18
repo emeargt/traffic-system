@@ -198,6 +198,8 @@ int main(void)
 	/* Configure the system ready to run the demo.  The clock configuration
 	can be done here if it was not done before main() was called. */
 	prvSetupHardware();
+	adc_init();
+	gpioA_init();
 	gpioB_init();
 	spi_init();
 
@@ -223,9 +225,13 @@ int main(void)
 static void Manager_Task( void *pvParameters )
 {
 	uint8_t data = 0b1;
+	uint16_t test = 0;
 	while(1)
 	{
-		SPI_I2S_SendData(SPI1, data);
+		//SPI_I2S_SendData(SPI1, data);
+
+		test=ADC_GetConversionValue(ADC1);
+		printf("%d\n",test);
 		vTaskDelay(1000);
 	}
 
@@ -347,8 +353,14 @@ static void gpioA_init( void )
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource6, GPIO_AF_SPI1); // SPI1_MISO
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource7, GPIO_AF_SPI1); // SPI1_MOSI
 
-	// Init pins for SPI
 	GPIO_InitTypeDef GPIOA_InitStruct;
+	GPIOA_InitStruct.GPIO_Pin = GPIO_Pin_1;
+	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AN;
+	GPIOA_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init(GPIOA, &GPIOA_InitStruct);
+
+	// Init pins for SPI
+
 	GPIOA_InitStruct.GPIO_Pin = GPIO_Pin_5 | GPIO_Pin_6 | GPIO_Pin_7;
 	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AF;
 	GPIOA_InitStruct.GPIO_OType = GPIO_OType_PP;
@@ -356,9 +368,7 @@ static void gpioA_init( void )
 	GPIOA_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(GPIOA, &GPIOA_InitStruct);
 	
-	GPIOA_InitStruct.GPIO_Pin = ADC_Pin;
-	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AN;
-	GPIOA_Init(GPIOA, &GPIOA_InitStruct);
+
 }
 
 static void gpioB_init( void )
@@ -382,15 +392,31 @@ static void adc_init( void )
 {
 	// Enable Periph Clock
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
+	ADC_CommonInitTypeDef ADC_CommonInitStruct;
+	/* Single ADC mode */
+	ADC_CommonInitStruct.ADC_Mode = ADC_Mode_Independent;
+	 /* ADCCLK = PCLK2/2 */
+	ADC_CommonInitStruct.ADC_Prescaler = ADC_Prescaler_Div2;
+	 /* Available only for multi ADC mode */
+	ADC_CommonInitStruct.ADC_DMAAccessMode = ADC_DMAAccessMode_Disabled;
+	 /* Delay between 2 sampling phases */
+	ADC_CommonInitStruct.ADC_TwoSamplingDelay =	ADC_TwoSamplingDelay_5Cycles;
+	ADC_CommonInit(&ADC_CommonInitStruct);
+
 	ADC_InitTypeDef ADC_InitStruct;
 	ADC_InitStruct.ADC_Resolution = ADC_Resolution_12b;
 	ADC_InitStruct.ADC_ScanConvMode = DISABLE;
-	ADC_InitStruct.ADC_ContinuousConvMode = DISABLE;
+	ADC_InitStruct.ADC_ContinuousConvMode = ENABLE;
 	ADC_InitStruct.ADC_ExternalTrigConvEdge = ADC_ExternalTrigConvEdge_None;
 	ADC_InitStruct.ADC_ExternalTrigConv = ADC_ExternalTrigConv_T1_CC1;
 	ADC_InitStruct.ADC_DataAlign = ADC_DataAlign_Right;
 	ADC_InitStruct.ADC_NbrOfConversion = 1;
 	
+	ADC_RegularChannelConfig(ADC1, ADC_Channel_1, 1, ADC_SampleTime_3Cycles);
+
 	// Write ADC Configuration to register
 	ADC_Init(ADC1, &ADC_InitStruct);
+	ADC_Cmd(ADC1,ENABLE);
+	ADC_ContinuousModeCmd(ADC1, ENABLE);
+	ADC_SoftwareStartConv(ADC1);
 }
