@@ -86,6 +86,7 @@
 extern uint32_t SystemCoreClock;
 
 #define configUSE_PREEMPTION			1
+#define configUSE_TIME_SLICING			1
 #define configUSE_IDLE_HOOK				1
 #define configUSE_TICK_HOOK				0
 #define configCPU_CLOCK_HZ				( SystemCoreClock )

@@ -137,6 +137,7 @@ functionality.
 /* Standard includes. */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "stm32f4_discovery.h"
 #include "stm32f4xx_conf.h"
 
@@ -155,9 +156,9 @@ functionality.
 
 enum light
 {
-	GREEN = 0,
-	YELLOW = 1,
-	RED = 2
+    RED = 0b001,
+	YELLOW = 0b010,
+	GREEN = 0b100
 };
 
 /*
@@ -166,16 +167,19 @@ enum light
  */
 static void prvSetupHardware( void );
 
+/* Initialization Functions */
 static void spi_init( void );
 static void gpioA_init( void );
 static void gpioB_init( void );
 static void adc_init( void );
 
+/* Other Functions */
+void mySPI_send(SPI_TypeDef *SPIx, uint8_t data);
+
 /*
  * The queue send and receive tasks as described in the comments at the top of
  * this file.
  */
-static void Manager_Task( void *pvParameters );
 static void Flow_Adjust_Task( void *pvParameters );
 static void Traffic_Gen_Task( void *pvParameters );
 static void Light_State_Task( void *pvParameters );
@@ -201,9 +205,9 @@ int main(void)
 	/* Create the queue used by the queue send and queue receive tasks.
 	http://www.freertos.org/a00116.html */
 	xQ_flow_rate = xQueueCreate( mainQUEUE_LENGTH, sizeof( double ) );
-	xQ_light_period = xQueueCreate( 1, sizeof(uint32_t) );
-	xQ_light_state = xQueueCreate( 1, sizeof(uint8_t) );
-	xQ_car_gen = xQueueCreate( mainQUEUE_LENGTH, sizeof(uint8_t) );
+	xQ_light_period = xQueueCreate( 1, sizeof( double ) );
+	xQ_light_state = xQueueCreate( 1, sizeof( uint8_t ) );
+	xQ_car_gen = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint8_t ) );
 
 	/* Add to the registry, for the benefit of kernel aware debugging. */
 	vQueueAddToRegistry( xQ_flow_rate, "FlowRateQueue" );
@@ -231,6 +235,7 @@ static void Flow_Adjust_Task( void *pvParameters )
 	{
 		double adc_norm = (double)ADC_GetConversionValue(ADC1) / 4095;
 		double flow_rate = (0.8 * adc_norm + 0.2) * 100; // car gen probability between 20 - 100
+		xQueueOverwrite( xQ_light_period, &adc_norm );
 		if( xQueueSend( xQ_flow_rate, &flow_rate, 1000 ) )
 		{
 			vTaskDelay(1000);
@@ -259,29 +264,43 @@ static void Traffic_Gen_Task( void *pvParameters )
 		{
 			printf("Traffic Gen Task: No flow rate values available on the queue.\n");
 		}
-		vTaskDelay(100);
+		vTaskDelay(1000);
 	}
 }
 
 static void Light_State_Task( void *pvParameters )
 {
 	enum light state = GREEN;
-	unsigned int durations[3] = {0, 0, 0}; // these should probably have initial values
+	unsigned int durations[3] = {0, 2, 0}; // red, yellow green
 	while(1)
 	{
-		double prob = 0.0;
-		if( xQueuePeek( xQ_flow_rate, &prob, 0 ) )
+		double flow = 0.0;
+		if( xQueuePeek( xQ_light_period, &flow, 0 ) )
 		{
-			// update light durations
+			durations[2] = (unsigned int)(7 * flow + 3); // update green light period
+			durations[0] = (unsigned int)(-7 * flow + 10); // update red light period
 		}
+		else
 		{
 			printf("Light State Task: No flow rate values to peek at.\n");
 		}
 		switch(state)
 		{
 		case GREEN:
+			xQueueOverwrite( xQ_light_state, &state );
+			state = YELLOW;
+			vTaskDelay(durations[2] * 1000); // wait till end of green light
+			break;
 		case YELLOW:
+			xQueueOverwrite( xQ_light_state, &state );
+			state = RED;
+			vTaskDelay(durations[1] * 1000); // wait till end of yellow light
+			break;
 		case RED:
+			xQueueOverwrite( xQ_light_state, &state );
+			state = GREEN;
+			vTaskDelay(durations[0] * 1000); // wait till end of red light
+			break;
 		}
 
 	}
@@ -289,9 +308,33 @@ static void Light_State_Task( void *pvParameters )
 
 static void Sys_Display_Task( void *pvParameters )
 {
+	uint8_t traffic_lower = 0x00;
+	uint16_t traffic_upper = 0x0000;
+	uint8_t light_state = 0x00;
 	while(1)
 	{
-		//SPI_I2S_SendData(SPI1, data);
+		uint8_t car = 0;
+		xQueuePeek( xQ_light_state, &light_state, 0 );
+		if( xQueueReceive( xQ_car_gen, &car, 0 ) )
+		{
+			if(light_state != GREEN)
+			{
+				traffic_upper = traffic_upper << 1;
+				traffic_lower |= (traffic_lower << 1) | (car & 0x1);
+			}
+			else
+			{
+				traffic_upper = (traffic_upper << 1) | ((traffic_lower & 0x80) >> 7);
+				traffic_lower = (traffic_lower << 1) | (car & 0x1);
+			}
+		}
+		uint8_t send1 = ((light_state << 5) & 0xE0) | ((traffic_upper & 0x0700) >> 8);
+		uint8_t send2 = traffic_upper & 0x00FF;
+		mySPI_send(SPI1, send1);
+		mySPI_send(SPI1, send2);
+		mySPI_send(SPI1, traffic_lower);
+
+		vTaskDelay(500);
 	}
 }
 
@@ -363,7 +406,7 @@ static void spi_init( void )
 
 	// Init SPI interface
 	SPI_InitTypeDef SPI1_InitStruct;
-	SPI1_InitStruct.SPI_Direction = SPI_Direction_2Lines_FullDuplex;
+	SPI1_InitStruct.SPI_Direction = SPI_Direction_1Line_Tx;
 	SPI1_InitStruct.SPI_Mode = SPI_Mode_Master;
 	SPI1_InitStruct.SPI_DataSize = SPI_DataSize_8b;
 	SPI1_InitStruct.SPI_CPOL = SPI_CPOL_High;
@@ -391,14 +434,6 @@ static void gpioA_init( void )
 	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AN;
 	GPIOA_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
 	GPIO_Init(GPIOA, &GPIOA_InitStruct);
-
-	// Init pins for SPI
-	GPIOA_InitStruct.GPIO_Pin = GPIO_Pin_5 | GPIO_Pin_6 | GPIO_Pin_7;
-	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AF;
-	GPIOA_InitStruct.GPIO_OType = GPIO_OType_PP;
-	GPIOA_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
-	GPIOA_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
-	GPIO_Init(GPIOA, &GPIOA_InitStruct);
 }
 
 static void gpioB_init( void )
@@ -413,7 +448,7 @@ static void gpioB_init( void )
 	GPIOB_InitStruct.GPIO_Mode = GPIO_Mode_AF;
 	GPIOB_InitStruct.GPIO_OType = GPIO_OType_PP;
 	GPIOB_InitStruct.GPIO_PuPd = GPIO_PuPd_NOPULL;
-	GPIOB_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIOB_InitStruct.GPIO_Speed = GPIO_Speed_25MHz;
 	GPIO_Init(GPIOB, &GPIOB_InitStruct);
 }
 
@@ -449,4 +484,11 @@ static void adc_init( void )
 	ADC_Cmd(ADC1,ENABLE);
 	ADC_ContinuousModeCmd(ADC1, ENABLE);
 	ADC_SoftwareStartConv(ADC1);
+}
+
+void mySPI_send(SPI_TypeDef *SPIx, uint8_t data)
+{
+	while((SPIx->SR & SPI_SR_BSY) != 0x0000);
+	SPIx->DR = (uint16_t)data;
+	while((SPIx->SR & SPI_SR_BSY) != 0x0000);
 }
