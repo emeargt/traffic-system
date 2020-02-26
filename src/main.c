@@ -175,6 +175,7 @@ static void adc_init( void );
 
 /* Other Functions */
 void mySPI_send(SPI_TypeDef *SPIx, uint8_t data);
+void vTimerCallback(TimerHandle_t xtimer);
 
 /*
  * The queue send and receive tasks as described in the comments at the top of
@@ -189,6 +190,9 @@ xQueueHandle xQ_flow_rate = 0;
 xQueueHandle xQ_light_period = 0;
 xQueueHandle xQ_light_state = 0;
 xQueueHandle xQ_car_gen = 0;
+
+TimerHandle_t light_timer = 0;
+TaskHandle_t light_state_task = 0;
 
 /*-----------------------------------------------------------*/
 
@@ -215,9 +219,11 @@ int main(void)
 	vQueueAddToRegistry( xQ_light_state, "LightStateQueue" );
 	vQueueAddToRegistry( xQ_car_gen, "CarGenQueue" );
 
+	light_timer = xTimerCreate( "Light", pdMS_TO_TICKS(16000), pdFALSE, (void*)0, vTimerCallback);
+
 	xTaskCreate( Flow_Adjust_Task, "Flow-Adjust", configMINIMAL_STACK_SIZE, NULL, 1, NULL );
 	xTaskCreate( Traffic_Gen_Task, "Traffic-Gen", configMINIMAL_STACK_SIZE, NULL, 0, NULL );
-	xTaskCreate( Light_State_Task, "Light-State", configMINIMAL_STACK_SIZE, NULL, 2, NULL );
+	xTaskCreate( Light_State_Task, "Light-State", configMINIMAL_STACK_SIZE, NULL, 2, &light_state_task );
 	xTaskCreate( Sys_Display_Task, "Sys-Display", configMINIMAL_STACK_SIZE, NULL, 0, NULL );
 
 	/* Start the tasks and timer running. */
@@ -233,10 +239,11 @@ static void Flow_Adjust_Task( void *pvParameters )
 {
 	while(1)
 	{
-		double adc_norm = (double)ADC_GetConversionValue(ADC1) / 4095;
-		double flow_rate = (0.8 * adc_norm + 0.2) * 100; // car gen probability between 20 - 100
+		uint16_t adc_val = ADC_GetConversionValue(ADC1);
+		double adc_norm = (double)adc_val / 4095;
+		double prob = (0.8 * adc_norm + 0.2) * 100; // car gen probability between 20 - 100
 		xQueueOverwrite( xQ_light_period, &adc_norm );
-		if( xQueueSend( xQ_flow_rate, &flow_rate, 1000 ) )
+		if( xQueueSend( xQ_flow_rate, &prob, 1000 ) )
 		{
 			vTaskDelay(1000);
 		}
@@ -264,21 +271,21 @@ static void Traffic_Gen_Task( void *pvParameters )
 		{
 			printf("Traffic Gen Task: No flow rate values available on the queue.\n");
 		}
-		vTaskDelay(1000);
+		vTaskDelay(500);
 	}
 }
 
 static void Light_State_Task( void *pvParameters )
 {
 	enum light state = GREEN;
-	unsigned int durations[3] = {0, 2, 0}; // red, yellow green
+	unsigned int durations[3] = {6000, 2000, 12000}; // red, yellow, green
 	while(1)
 	{
 		double flow = 0.0;
 		if( xQueuePeek( xQ_light_period, &flow, 0 ) )
 		{
-			durations[2] = (unsigned int)(7 * flow + 3); // update green light period
-			durations[0] = (unsigned int)(-7 * flow + 10); // update red light period
+			durations[2] = (unsigned int)((6 * flow + 12) * 1000); // update green light period in ms
+			durations[0] = (unsigned int)((-6 * flow + 12) * 1000); // update red light period in ms
 		}
 		else
 		{
@@ -289,20 +296,29 @@ static void Light_State_Task( void *pvParameters )
 		case GREEN:
 			xQueueOverwrite( xQ_light_state, &state );
 			state = YELLOW;
-			vTaskDelay(durations[2] * 1000); // wait till end of green light
+			//xTimerReset( light_timer, 1000 );
+			xTimerChangePeriod( light_timer, pdMS_TO_TICKS(durations[2]), 0 );
+			xTimerStart( light_timer, 0 );
+			//vTaskDelay(5000);
 			break;
 		case YELLOW:
 			xQueueOverwrite( xQ_light_state, &state );
 			state = RED;
-			vTaskDelay(durations[1] * 1000); // wait till end of yellow light
+			//xTimerReset( light_timer, 1000 );
+			xTimerChangePeriod( light_timer, pdMS_TO_TICKS(durations[1]), 0 );
+			xTimerStart( light_timer, 0 );
+			//vTaskDelay(5000);
 			break;
 		case RED:
 			xQueueOverwrite( xQ_light_state, &state );
 			state = GREEN;
-			vTaskDelay(durations[0] * 1000); // wait till end of red light
+			//xTimerReset( light_timer, 1000 );
+			xTimerChangePeriod( light_timer, pdMS_TO_TICKS(durations[0]), 0 );
+			xTimerStart( light_timer, 0 );
+			vTaskDelay(5000);
 			break;
 		}
-
+		vTaskSuspend( light_state_task );
 	}
 }
 
@@ -425,10 +441,6 @@ static void gpioA_init( void )
 {
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE); // enable clocks for SPI1 pins on GPIOA
 
-	GPIO_PinAFConfig(GPIOA, GPIO_PinSource5, GPIO_AF_SPI1); // SPI1_SCK
-	GPIO_PinAFConfig(GPIOA, GPIO_PinSource6, GPIO_AF_SPI1); // SPI1_MISO
-	GPIO_PinAFConfig(GPIOA, GPIO_PinSource7, GPIO_AF_SPI1); // SPI1_MOSI
-
 	GPIO_InitTypeDef GPIOA_InitStruct;
 	GPIOA_InitStruct.GPIO_Pin = GPIO_Pin_1;
 	GPIOA_InitStruct.GPIO_Mode = GPIO_Mode_AN;
@@ -492,3 +504,9 @@ void mySPI_send(SPI_TypeDef *SPIx, uint8_t data)
 	SPIx->DR = (uint16_t)data;
 	while((SPIx->SR & SPI_SR_BSY) != 0x0000);
 }
+
+void vTimerCallback(TimerHandle_t xtimer)
+{
+	vTaskResume( light_state_task );
+}
+
