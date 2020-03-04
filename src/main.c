@@ -149,22 +149,17 @@ functionality.
 #include "../FreeRTOS_Source/include/task.h"
 #include "../FreeRTOS_Source/include/timers.h"
 
-
-
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 100
 
 enum light
 {
-    RED = 0b001,
+    	RED = 0b001,
 	YELLOW = 0b010,
 	GREEN = 0b100
 };
 
-/*
- * TODO: Implement this function for any hardware specific clock configuration
- * that was not already performed before main() was called.
- */
+/* Hardware Specific Clock Config */
 static void prvSetupHardware( void );
 
 /* Initialization Functions */
@@ -174,40 +169,38 @@ static void gpioB_init( void );
 static void adc_init( void );
 
 /* Other Functions */
-void mySPI_send(SPI_TypeDef *SPIx, uint8_t data);
-void vTimerCallback(TimerHandle_t xtimer);
+void mySPI_send(SPI_TypeDef *SPIx, uint8_t data); // SPI send function
+void vTimerCallback(TimerHandle_t xtimer); // software timer callback function
 
-/*
- * The queue send and receive tasks as described in the comments at the top of
- * this file.
- */
+/* Tasks */
 static void Flow_Adjust_Task( void *pvParameters );
 static void Traffic_Gen_Task( void *pvParameters );
 static void Light_State_Task( void *pvParameters );
 static void Sys_Display_Task( void *pvParameters );
 
+/* Queue Handle Declarations */
 xQueueHandle xQ_flow_rate = 0;
 xQueueHandle xQ_light_period = 0;
 xQueueHandle xQ_light_state = 0;
 xQueueHandle xQ_car_gen = 0;
 
+/* Software Timer Handles */
 TimerHandle_t light_timer = 0;
-TaskHandle_t light_state_task = 0;
+
+TaskHandle_t light_state_task = 0; // task handle for the light state task
 
 /*-----------------------------------------------------------*/
 
 int main(void)
 {
-	/* Configure the system ready to run the demo.  The clock configuration
-	can be done here if it was not done before main() was called. */
+	/* Configure system components */
 	prvSetupHardware();
 	adc_init();
 	gpioA_init();
 	gpioB_init();
 	spi_init();
 
-	/* Create the queue used by the queue send and queue receive tasks.
-	http://www.freertos.org/a00116.html */
+	/* Create the queues */
 	xQ_flow_rate = xQueueCreate( mainQUEUE_LENGTH, sizeof( double ) );
 	xQ_light_period = xQueueCreate( 1, sizeof( double ) );
 	xQ_light_state = xQueueCreate( 1, sizeof( uint8_t ) );
@@ -218,9 +211,11 @@ int main(void)
 	vQueueAddToRegistry( xQ_light_period, "LightPeriodQueue" );
 	vQueueAddToRegistry( xQ_light_state, "LightStateQueue" );
 	vQueueAddToRegistry( xQ_car_gen, "CarGenQueue" );
-
+	
+	/* Create timer used for traffic light duration */
 	light_timer = xTimerCreate( "Light", pdMS_TO_TICKS(16000), pdFALSE, (void*)0, vTimerCallback);
 
+	/* Create all tasks */
 	xTaskCreate( Flow_Adjust_Task, "Flow-Adjust", configMINIMAL_STACK_SIZE, NULL, 1, NULL );
 	xTaskCreate( Traffic_Gen_Task, "Traffic-Gen", configMINIMAL_STACK_SIZE, NULL, 0, NULL );
 	xTaskCreate( Light_State_Task, "Light-State", configMINIMAL_STACK_SIZE, NULL, 2, &light_state_task );
@@ -235,15 +230,20 @@ int main(void)
 
 /*-----------------------------------------------------------*/
 
+/* Flow Adjustment Task
+ * - reads in ADC value
+ * - normalizes ADC value and sends it to the Light State task
+ * - calculates a car generation probability and sends it to the Traffic Generation task
+ */
 static void Flow_Adjust_Task( void *pvParameters )
 {
 	while(1)
 	{
-		uint16_t adc_val = ADC_GetConversionValue(ADC1);
-		double adc_norm = (double)adc_val / 4095;
+		uint16_t adc_val = ADC_GetConversionValue(ADC1); // read in ADC value
+		double adc_norm = (double)adc_val / 4095; // normalize ADC value
 		double prob = (0.8 * adc_norm + 0.2) * 100; // car gen probability between 20 - 100
-		xQueueOverwrite( xQ_light_period, &adc_norm );
-		if( xQueueSend( xQ_flow_rate, &prob, 1000 ) )
+		xQueueOverwrite( xQ_light_period, &adc_norm ); // send adc_norm to light state task
+		if( xQueueSend( xQ_flow_rate, &prob, 1000 ) ) // send car gen probability to traffic gen task
 		{
 			vTaskDelay(1000);
 		}
@@ -254,6 +254,11 @@ static void Flow_Adjust_Task( void *pvParameters )
 	}
 }
 
+/* Traffic Generation Task
+ * - receives a car generation probability
+ * - randomly generates a new car (could be a car or a car gap)
+ * - sends the new car the the System Display task
+ */
 static void Traffic_Gen_Task( void *pvParameters )
 {
 	while(1)
@@ -261,8 +266,8 @@ static void Traffic_Gen_Task( void *pvParameters )
 		double prob = 0.0;
 		if( xQueueReceive( xQ_flow_rate, &prob, 1000 ) )
 		{
-			uint8_t car_val = (rand() % 100) < prob;
-			if( !xQueueSend( xQ_car_gen, &car_val, 1000 ) )
+			uint8_t car_val = (rand() % 100) < prob; // randomly generate a new car
+			if( !xQueueSend( xQ_car_gen, &car_val, 1000 ) ) // send new car to system display task
 			{
 				printf("Traffic Gen Task: Failed to add new car (or non-car) to the queue.\n");
 			}
@@ -275,6 +280,14 @@ static void Traffic_Gen_Task( void *pvParameters )
 	}
 }
 
+/* Light State Task
+ * - receive the current traffic flow rate (normalized ADC value)
+ * - update the red and green traffic light durations
+ * - switch to the current light state
+ * - set the next light state
+ * - start a timer for the current light duration
+ * - suspend
+ */
 static void Light_State_Task( void *pvParameters )
 {
 	enum light state = GREEN;
@@ -282,7 +295,7 @@ static void Light_State_Task( void *pvParameters )
 	while(1)
 	{
 		double flow = 0.0;
-		if( xQueuePeek( xQ_light_period, &flow, 0 ) )
+		if( xQueuePeek( xQ_light_period, &flow, 0 ) ) // get current traffic flow rate
 		{
 			durations[2] = (unsigned int)((6 * flow + 12) * 1000); // update green light period in ms
 			durations[0] = (unsigned int)((-6 * flow + 12) * 1000); // update red light period in ms
@@ -295,55 +308,50 @@ static void Light_State_Task( void *pvParameters )
 		{
 		case GREEN:
 			xQueueOverwrite( xQ_light_state, &state );
-			state = YELLOW;
-			//xTimerReset( light_timer, 1000 );
+			state = YELLOW; // set next light state
 			xTimerChangePeriod( light_timer, pdMS_TO_TICKS(durations[2]), 0 );
-			xTimerStart( light_timer, 0 );
-			//vTaskDelay(5000);
+			xTimerStart( light_timer, 0 ); // start green light timer
 			break;
 		case YELLOW:
 			xQueueOverwrite( xQ_light_state, &state );
-			state = RED;
-			//xTimerReset( light_timer, 1000 );
+			state = RED; // set next light state
 			xTimerChangePeriod( light_timer, pdMS_TO_TICKS(durations[1]), 0 );
-			xTimerStart( light_timer, 0 );
-			//vTaskDelay(5000);
+			xTimerStart( light_timer, 0 ); // start yellow light timer
 			break;
 		case RED:
 			xQueueOverwrite( xQ_light_state, &state );
-			state = GREEN;
-			//xTimerReset( light_timer, 1000 );
+			state = GREEN; // set next light state
 			xTimerChangePeriod( light_timer, pdMS_TO_TICKS(durations[0]), 0 );
-			xTimerStart( light_timer, 0 );
-			vTaskDelay(5000);
+			xTimerStart( light_timer, 0 ); // start red light timer
 			break;
 		}
-		vTaskSuspend( light_state_task );
+		vTaskSuspend( light_state_task ); // suspend task until light needs to be changed
 	}
 }
 
 static void Sys_Display_Task( void *pvParameters )
 {
-	uint8_t traffic_lower = 0x00;
-	uint16_t traffic_upper = 0x0000;
-	uint8_t light_state = 0x00;
+	uint8_t traffic_lower = 0x00; // LED road array lower buffer (before intersection)
+	uint16_t traffic_upper = 0x0000; // LED road array upper buffer (intersection and after)
+	uint8_t light_state = 0x00; // current light state to display
 	while(1)
 	{
 		uint8_t car = 0;
 		xQueuePeek( xQ_light_state, &light_state, 0 );
-		if( xQueueReceive( xQ_car_gen, &car, 0 ) )
+		if( xQueueReceive( xQ_car_gen, &car, 0 ) ) // get new car or car gap
 		{
-			if(light_state != GREEN)
+			if(light_state != GREEN) // if yellow or red light
 			{
-				traffic_upper = traffic_upper << 1;
-				traffic_lower |= (traffic_lower << 1) | (car & 0x1);
+				traffic_upper = traffic_upper << 1; // move cars in upper buffer along
+				traffic_lower |= (traffic_lower << 1) | (car & 0x1); // stop cars at intersection
 			}
 			else
 			{
-				traffic_upper = (traffic_upper << 1) | ((traffic_lower & 0x80) >> 7);
-				traffic_lower = (traffic_lower << 1) | (car & 0x1);
+				traffic_upper = (traffic_upper << 1) | ((traffic_lower & 0x80) >> 7); // move cars in upper buffer along and add last car from lower buffer
+				traffic_lower = (traffic_lower << 1) | (car & 0x1); // move cars in lower buffer along and add new car
 			}
 		}
+		// split LED array in 3 sends via SPI
 		uint8_t send1 = ((light_state << 5) & 0xE0) | ((traffic_upper & 0x0700) >> 8);
 		uint8_t send2 = traffic_upper & 0x00FF;
 		mySPI_send(SPI1, send1);
@@ -439,7 +447,7 @@ static void spi_init( void )
 
 static void gpioA_init( void )
 {
-	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE); // enable clocks for SPI1 pins on GPIOA
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE); // enable clock for ADC pin on GPIOA
 
 	GPIO_InitTypeDef GPIOA_InitStruct;
 	GPIOA_InitStruct.GPIO_Pin = GPIO_Pin_1;
@@ -500,13 +508,13 @@ static void adc_init( void )
 
 void mySPI_send(SPI_TypeDef *SPIx, uint8_t data)
 {
-	while((SPIx->SR & SPI_SR_BSY) != 0x0000);
-	SPIx->DR = (uint16_t)data;
-	while((SPIx->SR & SPI_SR_BSY) != 0x0000);
+	while((SPIx->SR & SPI_SR_BSY) != 0x0000); // wait till SPI not busy
+	SPIx->DR = (uint16_t)data; // write to SPI data register
+	while((SPIx->SR & SPI_SR_BSY) != 0x0000); // wait till SPI not busy
 }
 
 void vTimerCallback(TimerHandle_t xtimer)
 {
-	vTaskResume( light_state_task );
+	vTaskResume( light_state_task ); // resume light state task when light timer expires
 }
 
